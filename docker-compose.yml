@@ -1,0 +1,12 @@
+services:
+  test:
+    container_name: test_container_one
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - PORT=6500
+      - VIDEO_SOURCE=0
+    volumes:
+      - /home/samuel/Documents/code/rust/vision-test-3/target/release/vision-test-3:/work/vision-test-3
+    entrypoint: ["./vision-test-3"]

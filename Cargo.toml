@@ -1,0 +1,9 @@
+[package]
+name = "vision-test-3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hyper = "1.4.1"
+opencv = "0.92.2"
+tokio = { version = "1.39.2", features = ["full"] }
