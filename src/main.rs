@@ -1,70 +1,140 @@
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
+use std::time::Duration;
 
-use opencv::core::Vector;
-use opencv::videoio::VideoCapture;
-use opencv::{imgcodecs, prelude::*, videoio};
+use jpegxl_rs::encoder_builder;
+use libcamera::camera::CameraConfigurationStatus;
+use libcamera::camera_manager::CameraManager;
+use libcamera::framebuffer_allocator::{FrameBuffer, FrameBufferAllocator};
+use libcamera::framebuffer_map::MemoryMappedFrameBuffer;
+use libcamera::pixel_format::PixelFormat;
+use libcamera::stream::StreamRole;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
+
+const PIXEL_FORMAT_MJPEG: PixelFormat =
+    PixelFormat::new(u32::from_le_bytes([b'M', b'J', b'P', b'G']), 0);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let env_port = std::env::var("PORT").expect("Please define webserver port!");
-    let env_cam_source = std::env::var("VIDEO_SOURCE").expect("Please define video source!");
 
     let addr = SocketAddr::from(([0, 0, 0, 0], env_port.parse::<u16>().unwrap()));
     let listener = TcpListener::bind(addr).await.unwrap();
 
-    let mut cam =
-        videoio::VideoCapture::new(env_cam_source.parse::<i32>().unwrap(), videoio::CAP_V4L2)
-            .unwrap();
+    let mgr = CameraManager::new().expect("camera");
+    let cameras = mgr.cameras();
+    let mut cam = cameras
+        .iter()
+        .next()
+        .expect("no cameras found")
+        .acquire()
+        .unwrap();
+    let mut cfgs = cam
+        .generate_configuration(&[StreamRole::ViewFinder])
+        .unwrap();
 
-    cam.set(videoio::CAP_PROP_FRAME_HEIGHT, 1080.0).unwrap();
-    cam.set(videoio::CAP_PROP_FRAME_WIDTH, 720.0).unwrap();
+    cfgs.get_mut(0)
+        .unwrap()
+        .set_pixel_format(PIXEL_FORMAT_MJPEG);
 
-    let opened = videoio::VideoCapture::is_opened(&cam).unwrap();
-    if !opened {
-        panic!("Unable to open camera");
+    match cfgs.validate() {
+        CameraConfigurationStatus::Valid => println!("Camera configuration valid!"),
+        CameraConfigurationStatus::Adjusted => {
+            println!("Camera configuration was adjusted: {cfgs:#?}")
+        }
+        CameraConfigurationStatus::Invalid => panic!("Error validating camera configuration"),
     }
 
+    // Ensure that pixel format was unchanged
+    assert_eq!(
+        cfgs.get(0).unwrap().get_pixel_format(),
+        PIXEL_FORMAT_MJPEG,
+        "MJPEG is not supported by the camera"
+    );
+
+    cam.configure(&mut cfgs)
+        .expect("Unable to configure camera");
+
+    let mut alloc = FrameBufferAllocator::new(&cam);
+
+    // Allocate frame buffers for the stream
+    let cfg = cfgs.get(0).unwrap();
+    let cam_stream = cfg.stream().unwrap();
+    let buffers = alloc.alloc(&cam_stream).unwrap();
+    println!("Allocated {} buffers", buffers.len());
+
+    // Convert FrameBuffer to MemoryMappedFrameBuffer, which allows reading &[u8]
+    let buffers = buffers
+        .into_iter()
+        .map(|buf| MemoryMappedFrameBuffer::new(buf).unwrap())
+        .collect::<Vec<_>>();
+
+    // Create capture requests and attach buffers
+    let mut reqs = buffers
+        .into_iter()
+        .map(|buf| {
+            let mut req = cam.create_request(None).unwrap();
+            req.add_buffer(&cam_stream, buf).unwrap();
+            req
+        })
+        .collect::<Vec<_>>();
+
+    // Completed capture requests are returned as a callback
+    let (tx, rx) = std::sync::mpsc::channel();
+    cam.on_request_completed(move |req| {
+        tx.send(req).unwrap();
+    });
+
+    cam.start(None).unwrap();
+
     println!("Server running!");
+
+    // Jpeg XL
+    let mut encoder = encoder_builder().speed(jpegxl_rs::encode::EncoderSpeed::Falcon).build().unwrap();
 
     loop {
         let (mut stream, _) = listener.accept().await?;
 
-        stream_data(&mut stream, &mut cam).await;
-    }
-}
-
-async fn stream_data(stream: &mut TcpStream, cam: &mut VideoCapture) {
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n"
-    );
-    stream.write_all(response.as_bytes()).await.unwrap();
-
-    let mut frame = Mat::default();
-    let mut output_buff: Vector<u8> = Vector::<u8>::new();
-
-    loop {
-        cam.read(&mut frame).unwrap();
-        output_buff.clear();
-
-        imgcodecs::imencode_def(".jpg", &frame, &mut output_buff).expect("encode");
-
-        let image_data = format!(
-            "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
-            output_buff.len(),
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n"
         );
+        stream.write_all(response.as_bytes()).await.unwrap();
 
-        // This code is gross! However, it works so :)
-        let op1 = catch_stream(stream.write_all(image_data.as_bytes()).await);
-        let op2 = catch_stream(stream.write_all(output_buff.as_slice()).await);
-        let op3 = catch_stream(stream.write_all(b"\r\n").await);
-        let op4 = catch_stream(stream.flush().await);
+        loop {
+            cam.queue_request(reqs.pop().unwrap()).map_err(|(_, e)| e).unwrap();
 
-        // If tcp stream is broken exit loop.
-        if op1 == true || op2 == true || op3 == true || op4 == true {
-            break;
+            println!("Waiting for camera request execution");
+            // Allow a bit more time for first exposure/conversion to complete on slower cameras.
+            let req = rx.recv_timeout(Duration::from_secs(5)).expect("Camera request failed");
+
+            println!("Camera request {req:?} completed!");
+            println!("Metadata: {:#?}", req.metadata());
+
+            // Get framebuffer for our stream
+            let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&cam_stream).unwrap();
+
+            // MJPEG format has only one data plane containing encoded jpeg data with all the headers
+            let planes = framebuffer.data();
+            let jpeg_data = planes.first().unwrap();
+
+            let encoder_result = encoder.encode_jpeg(*jpeg_data).unwrap();
+            let image_data_prefix = format!(
+              "--frame\r\nContent-Type: image/jxl\r\nContent-Length: {}\r\n\r\n",
+              encoder_result.len(),
+            );
+            let jxl_data = encoder_result.iter().as_slice();
+
+            // This code is gross! However, it works so :)
+            let op1 = catch_stream(stream.write_all(image_data_prefix.as_bytes()).await);
+            let op2 = catch_stream(stream.write_all(jxl_data).await);
+            let op3 = catch_stream(stream.write_all(b"\r\n").await);
+            let op4 = catch_stream(stream.flush().await);
+
+            // If tcp stream is broken exit loop.
+            if op1 == true || op2 == true || op3 == true || op4 == true {
+                break;
+            }
         }
     }
 }
