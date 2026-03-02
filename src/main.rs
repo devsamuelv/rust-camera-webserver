@@ -10,7 +10,7 @@ use libcamera::framebuffer_map::MemoryMappedFrameBuffer;
 use libcamera::pixel_format::PixelFormat;
 use libcamera::stream::StreamRole;
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener};
 
 const PIXEL_FORMAT_MJPEG: PixelFormat =
     PixelFormat::new(u32::from_le_bytes([b'M', b'J', b'P', b'G']), 0);

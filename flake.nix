@@ -9,7 +9,7 @@
       url = "github:nix-community/naersk";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-25.11";
   };
 
   outputs =
@@ -33,6 +33,8 @@
         packages.default = naersk-lib.buildPackage {
           src = ./.;
           DEP_JXL_LIB = "${pkgs.libjxl.out}";
+          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [pkgs.llvmPackages_latest.libclang.lib];
+          PORT = 3001;
 
           buildInputs = [
             # Generic DevTools
@@ -40,7 +42,9 @@
             pkgs.pkg-config
             pkgs.clang
             pkgs.gcc
+            pkgs.libgcc
             pkgs.clang-tools
+            pkgs.rust-bindgen
             pkgs.libjxl
             pkgs.libllvm
             pkgs.libclang
@@ -55,6 +59,7 @@
             RUST_SRC_PATH = rustPlatform.rustLibSrc;
             CLANG = "${pkgs.libclang.out}";
             DEP_JXL_LIB = "${pkgs.libjxl.out}";
+            LIBCLANG_PATH = pkgs.lib.makeLibraryPath [pkgs.llvmPackages_latest.libclang.lib];
 
             packages = [
               # Generic DevTools
@@ -64,6 +69,7 @@
               pkgs.libjxl
               pkgs.libllvm
               pkgs.libclang
+              pkgs.rust-bindgen
               pkgs.libcamera
               pkgs.nixfmt
             ];
