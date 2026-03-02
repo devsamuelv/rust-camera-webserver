@@ -19,7 +19,25 @@
       flake-utils,
       naersk
     }:
-    flake-utils.lib.eachDefaultSystem (
+    {
+      nixosConfigurations = {
+        orangepi5plus = nixpkgs.lib.nixosSystem {
+          system = "aarch64-linux";
+          modules = [
+            ./sdcard.nix
+            ./hardware-configuration.nix
+            ./configuration.nix
+            {
+              nixpkgs.buildPlatform = "x86_64-linux";
+              nixpkgs.hostPlatform = "aarch64-linux";
+            }
+          ];
+          specialArgs = {
+            inherit nixpkgs;
+          };
+        };
+      };
+    } // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = (
@@ -30,6 +48,7 @@
         naersk-lib = pkgs.callPackage naersk {};
       in
       {
+        # The naersk build breaks libcamera for some unknown reason.
         packages.default = naersk-lib.buildPackage {
           src = ./.;
           DEP_JXL_LIB = "${pkgs.libjxl.out}";
@@ -52,6 +71,8 @@
           ];
         };
 
+        packages.sdcard = self.nixosConfigurations.orangepi5plus.config.system.build.sdImage;
+
         devShells.default =
           with pkgs;
           mkShell {
@@ -64,6 +85,11 @@
             packages = [
               # Generic DevTools
               # clang-tools must be first before clang
+              (pkgs.writeShellScriptBin "_exec" ''
+                #!/bin/bash
+                export PORT=3001
+                cargo run --release
+              '')
               pkgs.pkg-config
               pkgs.clang-tools
               pkgs.libjxl
