@@ -17,7 +17,7 @@
       self,
       nixpkgs,
       flake-utils,
-      naersk
+      naersk,
     }:
     {
       nixosConfigurations = {
@@ -37,7 +37,8 @@
           };
         };
       };
-    } // flake-utils.lib.eachDefaultSystem (
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = (
@@ -45,14 +46,14 @@
             inherit system;
           }
         );
-        naersk-lib = pkgs.callPackage naersk {};
+        naersk-lib = pkgs.callPackage naersk { };
       in
       {
         # The naersk build breaks libcamera for some unknown reason.
         packages.default = naersk-lib.buildPackage {
           src = ./.;
           DEP_JXL_LIB = "${pkgs.libjxl.out}";
-          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [pkgs.llvmPackages_latest.libclang.lib];
+          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
           PORT = 3001;
 
           buildInputs = [
@@ -76,11 +77,16 @@
         devShells.default =
           with pkgs;
           mkShell {
-            buildInputs = [ cargo rustc rustfmt pre-commit rustPackages.clippy ];
+            buildInputs = [
+              cargo
+              rustc
+              rustfmt
+              pre-commit
+              rustPackages.clippy
+            ];
             RUST_SRC_PATH = rustPlatform.rustLibSrc;
-            CLANG = "${pkgs.libclang.out}";
             DEP_JXL_LIB = "${pkgs.libjxl.out}";
-            LIBCLANG_PATH = pkgs.lib.makeLibraryPath [pkgs.llvmPackages_latest.libclang.lib];
+            LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
 
             packages = [
               # Generic DevTools

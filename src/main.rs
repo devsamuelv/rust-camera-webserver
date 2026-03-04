@@ -10,7 +10,7 @@ use libcamera::framebuffer_map::MemoryMappedFrameBuffer;
 use libcamera::pixel_format::PixelFormat;
 use libcamera::stream::StreamRole;
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener};
+use tokio::net::TcpListener;
 
 const PIXEL_FORMAT_MJPEG: PixelFormat =
     PixelFormat::new(u32::from_le_bytes([b'M', b'J', b'P', b'G']), 0);
@@ -61,11 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Allocate frame buffers for the stream
     let cfg = cfgs.get(0).unwrap();
     let cam_stream = cfg.stream().unwrap();
-    let buffers = alloc.alloc(&cam_stream).unwrap();
-    println!("Allocated {} buffers", buffers.len());
+    let alloc_buffers = alloc.alloc(&cam_stream).unwrap();
+    println!("Allocated {} buffers", alloc_buffers.len());
 
     // Convert FrameBuffer to MemoryMappedFrameBuffer, which allows reading &[u8]
-    let buffers = buffers
+    let buffers = alloc_buffers
         .into_iter()
         .map(|buf| MemoryMappedFrameBuffer::new(buf).unwrap())
         .collect::<Vec<_>>();
@@ -91,7 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Server running!");
 
     // Jpeg XL
-    let mut encoder = encoder_builder().speed(jpegxl_rs::encode::EncoderSpeed::Falcon).build().unwrap();
+    let mut encoder = encoder_builder()
+        .speed(jpegxl_rs::encode::EncoderSpeed::Falcon)
+        .build()
+        .unwrap();
 
     loop {
         let (mut stream, _) = listener.accept().await?;
@@ -102,38 +105,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         stream.write_all(response.as_bytes()).await.unwrap();
 
         loop {
-            cam.queue_request(reqs.pop().unwrap()).map_err(|(_, e)| e).unwrap();
+            if reqs.len() > 0 {
+                let reqs = reqs.pop().unwrap();
+                cam.queue_request(reqs).map_err(|(_, e)| e).unwrap();
 
-            println!("Waiting for camera request execution");
-            // Allow a bit more time for first exposure/conversion to complete on slower cameras.
-            let req = rx.recv_timeout(Duration::from_secs(5)).expect("Camera request failed");
+                println!("Waiting for camera request execution");
+                // Allow a bit more time for first exposure/conversion to complete on slower cameras.
+                let req = rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("Camera request failed");
 
-            println!("Camera request {req:?} completed!");
-            println!("Metadata: {:#?}", req.metadata());
+                println!("Camera request {req:?} completed!");
+                println!("Metadata: {:#?}", req.metadata());
 
-            // Get framebuffer for our stream
-            let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&cam_stream).unwrap();
+                // Get framebuffer for our stream
+                let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> =
+                    req.buffer(&cam_stream).unwrap();
 
-            // MJPEG format has only one data plane containing encoded jpeg data with all the headers
-            let planes = framebuffer.data();
-            let jpeg_data = planes.first().unwrap();
+                // MJPEG format has only one data plane containing encoded jpeg data with all the headers
+                let planes = framebuffer.data();
+                let jpeg_data = planes.first().unwrap();
 
-            let encoder_result = encoder.encode_jpeg(*jpeg_data).unwrap();
-            let image_data_prefix = format!(
-              "--frame\r\nContent-Type: image/jxl\r\nContent-Length: {}\r\n\r\n",
-              encoder_result.len(),
-            );
-            let jxl_data = encoder_result.iter().as_slice();
+                let encoder_result = encoder.encode_jpeg(*jpeg_data).unwrap();
+                let image_data_prefix = format!(
+                    "--frame\r\nContent-Type: image/jxl\r\nContent-Length: {}\r\n\r\n",
+                    encoder_result.len(),
+                );
+                let jxl_data = encoder_result.iter().as_slice();
 
-            // This code is gross! However, it works so :)
-            let op1 = catch_stream(stream.write_all(image_data_prefix.as_bytes()).await);
-            let op2 = catch_stream(stream.write_all(jxl_data).await);
-            let op3 = catch_stream(stream.write_all(b"\r\n").await);
-            let op4 = catch_stream(stream.flush().await);
+                // This code is gross! However, it works so :)
+                let op1 = catch_stream(stream.write_all(image_data_prefix.as_bytes()).await);
+                let op2 = catch_stream(stream.write_all(jxl_data).await);
+                let op3 = catch_stream(stream.write_all(b"\r\n").await);
+                let op4 = catch_stream(stream.flush().await);
 
-            // If tcp stream is broken exit loop.
-            if op1 == true || op2 == true || op3 == true || op4 == true {
-                break;
+                // If tcp stream is broken exit loop.
+                if op1 == true || op2 == true || op3 == true || op4 == true {
+                    break;
+                }
+            } else {
+                // Convert FrameBuffer to MemoryMappedFrameBuffer, which allows reading &[u8]
+                let buffers = alloc_buffers
+                    .into_iter()
+                    .map(|buf| MemoryMappedFrameBuffer::new(buf).unwrap())
+                    .collect::<Vec<_>>();
+
+                reqs = buffers
+                    .into_iter()
+                    .map(|buf| {
+                        let mut req = cam.create_request(None).unwrap();
+                        req.add_buffer(&cam_stream, buf).unwrap();
+                        req
+                    })
+                    .collect::<Vec<_>>();
             }
         }
     }
