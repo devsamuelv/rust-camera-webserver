@@ -10,6 +10,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-25.11";
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -18,6 +19,7 @@
       nixpkgs,
       flake-utils,
       naersk,
+      crane
     }:
     {
       nixosConfigurations = {
@@ -47,18 +49,18 @@
           }
         );
         naersk-lib = pkgs.callPackage naersk { };
-      in
-      {
-        # The naersk build breaks libcamera for some unknown reason.
-        packages.default = naersk-lib.buildPackage {
-          src = ./.;
+
+        craneLib = crane.mkLib pkgs;
+
+        # Common arguments can be set here to avoid repeating them later
+        # Note: changes here will rebuild all dependency crates
+        commonArgs = {
+          src = craneLib.cleanCargoSource ./.;
+          strictDeps = true;
           DEP_JXL_LIB = "${pkgs.libjxl.out}";
-          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
-          PORT = 3001;
 
           buildInputs = [
-            # Generic DevTools
-            # clang-tools must be first before clang
+            # Add additional build inputs here
             pkgs.pkg-config
             pkgs.clang
             pkgs.gcc
@@ -69,8 +71,48 @@
             pkgs.libllvm
             pkgs.libclang
             pkgs.libcamera
+          ]
+          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+            # Additional darwin specific inputs can be set here
+            pkgs.libiconv
           ];
         };
+
+        my-crate = craneLib.buildPackage (
+          commonArgs
+          // {
+            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+            # Additional environment variables or build phases/hooks can be set
+            # here *without* rebuilding all dependency crates
+            # MY_CUSTOM_VAR = "some value";
+          }
+        );
+      in
+      {
+        # The naersk build breaks libcamera for some unknown reason.
+        # packages.default = naersk-lib.buildPackage {
+        #   src = ./.;
+        #   DEP_JXL_LIB = "${pkgs.libjxl.out}";
+        #   LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
+        #   PORT = 3001;
+
+          # buildInputs = [
+          #   # Generic DevTools
+          #   # clang-tools must be first before clang
+          #   pkgs.pkg-config
+          #   pkgs.clang
+          #   pkgs.gcc
+          #   pkgs.libgcc
+          #   pkgs.clang-tools
+          #   pkgs.rust-bindgen
+          #   pkgs.libjxl
+          #   pkgs.libllvm
+          #   pkgs.libclang
+          #   pkgs.libcamera
+          # ];
+        # };
+        packages.default = my-crate;
 
         packages.sdcard = self.nixosConfigurations.orangepi5plus.config.system.build.sdImage;
 
