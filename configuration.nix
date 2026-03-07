@@ -1,7 +1,13 @@
-{lib, pkgs, ...}: {
+{lib, pkgs, ...}: 
+let
+  publickey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC2e00/VCmGOXv8NDH+hjuhJLjPu6KSVzwZOv8QwF8Yn samuel@TheSpaceStation";
+in
+{
   nix.settings = {
     experimental-features = ["nix-command" "flakes"];
   };
+  networking.hostName = "curiosity";
+  networking.firewall.allowedTCPPorts = [3001 22];
 
   # List packages installed in system profile. To search, run:
   # $ nix search wget
@@ -39,7 +45,17 @@
     isNormalUser = true;
     home = "/home/rk";
     extraGroups = ["users" "wheel"];
+    openssh.authorizedKeys.keys = [
+      publickey
+    ];
   };
+
+  # enable closed source packages
+  nixpkgs.config.allowUnfree = true;
+
+  users.users.root.openssh.authorizedKeys.keys = [
+    publickey
+  ];
 
   system.stateVersion = "26.05";
 }

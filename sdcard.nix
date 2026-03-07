@@ -8,7 +8,7 @@ let
   # partition that already uses this UUID.
   rootPartitionUUID = "14e19a7b-0ae0-484d-9d54-43bd6fdc20c7";
   # TODO: change this if you are using a different board:
-  uboot = pkgs.ubootOrangePi5Plus;
+  uboot = pkgs.ubootOrangePi5;
 in {
   imports = [
     "${nixpkgs}/nixos/modules/installer/sd-card/sd-image.nix"
@@ -51,7 +51,7 @@ in {
     # The sd-image.nix has no way to disable firmware partition, so let's just
     # set its size to 1MB. We won't use it.
     firmwareSize = 1; # MiB
-    firmwarePartitionName = "DUMMY_UNUSED";
+    firmwarePartitionName = "DRIVE1";
 
     # Gap in front of the /boot/firmware partition, in mebibytes (1024×1024
     # bytes). That space is needed to fit the idbloader.img and u-boot.itb (see below).
