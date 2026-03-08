@@ -58,18 +58,24 @@
           src = craneLib.cleanCargoSource ./.;
           strictDeps = true;
           DEP_JXL_LIB = "${pkgs.libjxl.out}";
+          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
+
+          nativeBuildInputs = with pkgs; [
+            # Add extra native build inputs here, etc.
+            # pkg-config
+            pkgs.pkg-config
+            pkgs.clang-tools
+            pkgs.libgcc
+            pkgs.clang
+            pkgs.libllvm
+            pkgs.libclang
+            pkgs.gcc
+            pkgs.rust-bindgen
+          ];
 
           buildInputs = [
             # Add additional build inputs here
-            pkgs.pkg-config
-            pkgs.clang
-            pkgs.gcc
-            pkgs.libgcc
-            pkgs.clang-tools
-            pkgs.rust-bindgen
             pkgs.libjxl
-            pkgs.libllvm
-            pkgs.libclang
             pkgs.libcamera
           ]
           ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
