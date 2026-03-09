@@ -17,7 +17,12 @@ const PIXEL_FORMAT_MJPEG: PixelFormat =
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let env_port = std::env::var("PORT").expect("Please define webserver port!");
+    let env_port_res = std::env::var("PORT");
+    let mut env_port: String = String::from("3001");
+
+    if env_port_res.is_ok() {
+      env_port = env_port_res.unwrap();
+    }
 
     let addr = SocketAddr::from(([0, 0, 0, 0], env_port.parse::<u16>().unwrap()));
     let listener = TcpListener::bind(addr).await.unwrap();
@@ -145,7 +150,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             } else {
                 // Convert FrameBuffer to MemoryMappedFrameBuffer, which allows reading &[u8]
-                let buffers = alloc_buffers
+                let new_alloc_buffers = alloc.alloc(&cam_stream).unwrap();
+                let buffers = new_alloc_buffers
                     .into_iter()
                     .map(|buf| MemoryMappedFrameBuffer::new(buf).unwrap())
                     .collect::<Vec<_>>();

@@ -1,4 +1,4 @@
-{lib, pkgs, ...}: 
+{lib, self, pkgs, ...}: 
 let
   publickey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC2e00/VCmGOXv8NDH+hjuhJLjPu6KSVzwZOv8QwF8Yn samuel@TheSpaceStation";
 in
@@ -18,7 +18,8 @@ in
     neofetch
     lm_sensors # `sensors`
     btop # monitor system resources
-
+    libjxl
+    libcamera
     # Peripherals
     mtdutils
     i2c-tools

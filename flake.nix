@@ -5,12 +5,13 @@
     flake-utils = {
       url = "github:numtide/flake-utils";
     };
-    naersk = {
-      url = "github:nix-community/naersk";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-25.11";
     crane.url = "github:ipetkov/crane";
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -18,7 +19,7 @@
       self,
       nixpkgs,
       flake-utils,
-      naersk,
+      rust-overlay,
       crane
     }:
     {
@@ -43,84 +44,102 @@
     // flake-utils.lib.eachDefaultSystem (
       system:
       let
+        crossSystem = "aarch64-linux";
         pkgs = (
           import nixpkgs {
-            inherit system;
+            inherit crossSystem system;
+            overlays = [ (import rust-overlay) ];
           }
         );
-        naersk-lib = pkgs.callPackage naersk { };
 
         craneLib = crane.mkLib pkgs;
+        crateExpression =
+          {
+            openssl,
+            libiconv,
+            lib,
+            pkg-config,
+            stdenv,
+          }:
+          craneLib.buildPackage {
+            src = craneLib.cleanCargoSource ./.;
+            DEP_JXL_LIB = "${pkgs.libjxl.out}";
+            LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
+            strictDeps = true;
+
+            # Dependencies which need to be build for the current platform
+            # on which we are doing the cross compilation. In this case,
+            # pkg-config needs to run on the build platform so that the build
+            # script can find the location of openssl. Note that we don't
+            # need to specify the rustToolchain here since it was already
+            # overridden above.
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+              clang-tools
+              libgcc
+              clang
+              libllvm
+              libclang
+              gcc
+              rust-bindgen
+            ]
+            ++ lib.optionals stdenv.buildPlatform.isDarwin [
+              libiconv
+            ];
+
+            # Dependencies which need to be built for the platform on which
+            # the binary will run. In this case, we need to compile openssl
+            # so that it can be linked with our executable.
+            buildInputs = [
+              # Add additional build inputs here
+              openssl
+            ];
+          };
 
         # Common arguments can be set here to avoid repeating them later
         # Note: changes here will rebuild all dependency crates
-        commonArgs = {
-          src = craneLib.cleanCargoSource ./.;
-          strictDeps = true;
-          DEP_JXL_LIB = "${pkgs.libjxl.out}";
-          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
-
-          nativeBuildInputs = with pkgs; [
-            # Add extra native build inputs here, etc.
-            # pkg-config
-            pkgs.pkg-config
-            pkgs.clang-tools
-            pkgs.libgcc
-            pkgs.clang
-            pkgs.libllvm
-            pkgs.libclang
-            pkgs.gcc
-            pkgs.rust-bindgen
-          ];
-
-          buildInputs = [
-            # Add additional build inputs here
-            pkgs.libjxl
-            pkgs.libcamera
-          ]
-          ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-            # Additional darwin specific inputs can be set here
-            pkgs.libiconv
-          ];
-        };
-
-        my-crate = craneLib.buildPackage (
-          commonArgs
-          // {
-            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-            # Additional environment variables or build phases/hooks can be set
-            # here *without* rebuilding all dependency crates
-            # MY_CUSTOM_VAR = "some value";
-          }
-        );
-      in
-      {
-        # The naersk build breaks libcamera for some unknown reason.
-        # packages.default = naersk-lib.buildPackage {
-        #   src = ./.;
+        # commonArgs = {
+        #   src = craneLib.cleanCargoSource ./.;
+        #   strictDeps = true;
         #   DEP_JXL_LIB = "${pkgs.libjxl.out}";
         #   LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
-        #   PORT = 3001;
 
-          # buildInputs = [
-          #   # Generic DevTools
-          #   # clang-tools must be first before clang
-          #   pkgs.pkg-config
-          #   pkgs.clang
-          #   pkgs.gcc
-          #   pkgs.libgcc
-          #   pkgs.clang-tools
-          #   pkgs.rust-bindgen
-          #   pkgs.libjxl
-          #   pkgs.libllvm
-          #   pkgs.libclang
-          #   pkgs.libcamera
-          # ];
+        #   nativeBuildInputs = with pkgs; [
+        #     # Add extra native build inputs here, etc.
+        #     # pkg-config
+        #     pkgs.pkg-config
+        #     pkgs.clang-tools
+        #     pkgs.libgcc
+        #     pkgs.clang
+        #     pkgs.libllvm
+        #     pkgs.libclang
+        #     pkgs.gcc
+        #     pkgs.rust-bindgen
+        #   ];
+
+        #   buildInputs = [
+        #     # Add additional build inputs here
+        #     pkgs.libjxl
+        #     pkgs.libcamera
+        #   ]
+        #   ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+        #     # Additional darwin specific inputs can be set here
+        #     pkgs.libiconv
+        #   ];
         # };
+
+        my-crate = pkgs.callPackage crateExpression { };
+      in
+      {
         packages.default = my-crate;
 
         packages.sdcard = self.nixosConfigurations.orangepi5plus.config.system.build.sdImage;
+
+        apps.default = flake-utils.lib.mkApp {
+          drv = pkgs.writeScriptBin "my-app" ''
+            ${pkgs.pkgsBuildBuild.qemu}/bin/qemu-aarch64 ${my-crate}/bin/cross-rust-overlay
+          '';
+        };
 
         devShells.default =
           with pkgs;
